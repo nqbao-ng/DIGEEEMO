@@ -109,6 +109,7 @@ def train_or_eval_model(
 
         if train:
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
             optimizer.step()
 
         fused_features.append(fused_feature.cpu().detach().numpy())
