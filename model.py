@@ -26,6 +26,10 @@ class DiGemo(nn.Module):
         self.proj_v = nn.Linear(embedding_dims[1], args.hidden_dim, bias=False)
         self.proj_a = nn.Linear(embedding_dims[2], args.hidden_dim, bias=False)
 
+        self.norm_t = nn.LayerNorm(args.hidden_dim)
+        self.norm_v = nn.LayerNorm(args.hidden_dim)
+        self.norm_a = nn.LayerNorm(args.hidden_dim)
+
         # speaker embedding
         if n_classes_emo == 6 or n_classes_emo == 4:
             self.n_speakers = 2
@@ -104,11 +108,13 @@ class DiGemo(nn.Module):
         #     feature_a = self.conv_a(feature_a.permute(1, 2, 0)).transpose(1, 2)
 
         if 't' in self.modals:
-            feature_t = self.proj_t(feature_t.transpose(0, 1)) # (B, L, D)
+            feature_t = self.norm_t(self.proj_t(feature_t.transpose(0, 1)))
+        
         if 'v' in self.modals:
-            feature_v = self.proj_v(feature_v.transpose(0, 1))
+            feature_v = self.norm_v(self.proj_v(feature_v.transpose(0, 1)))
+        
         if 'a' in self.modals:
-            feature_a = self.proj_a(feature_a.transpose(0, 1))
+            feature_a = self.norm_a(self.proj_a(feature_a.transpose(0, 1)))
 
         # Speaker emb
         spk_idx = torch.argmax(qmask, -1).transpose(0, 1) # (B, L)
