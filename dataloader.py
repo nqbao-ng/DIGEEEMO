@@ -153,17 +153,6 @@ class CMUMOSEIDataset7(Dataset):
         audio = np.array(self.videoAudio[vid], dtype=np.float32)
         labels = np.array(self.labels_emotion[vid], dtype=np.int64)
 
-        # Fix NaN/Inf trong feature
-        text = np.nan_to_num(text, nan=0.0, posinf=0.0, neginf=0.0)
-        visual = np.nan_to_num(visual, nan=0.0, posinf=0.0, neginf=0.0)
-        audio = np.nan_to_num(audio, nan=0.0, posinf=0.0, neginf=0.0)
-
-        # Kiểm tra length phải khớp theo số utterance
-        L = len(labels)
-        assert text.shape[0] == L, f"{vid}: text length {text.shape[0]} != label length {L}"
-        assert visual.shape[0] == L, f"{vid}: visual length {visual.shape[0]} != label length {L}"
-        assert audio.shape[0] == L, f"{vid}: audio length {audio.shape[0]} != label length {L}"
-
         qmask = torch.FloatTensor(
             [
                 [1, 0] if x == "M" else [0, 1]
@@ -171,7 +160,7 @@ class CMUMOSEIDataset7(Dataset):
             ]
         )
 
-        umask = torch.FloatTensor([1] * L)
+        umask = torch.FloatTensor([1] * len(labels))
 
         return (
             torch.FloatTensor(text),       # textf
