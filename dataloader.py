@@ -106,6 +106,7 @@ class MELDDataset_BERT(Dataset):
 
 
 class CMUMOSEIDataset7(Dataset):
+
     def __init__(self, path, train=True):
         (
             self.videoIDs,
@@ -118,10 +119,10 @@ class CMUMOSEIDataset7(Dataset):
             self.trainVid,
             self.testVid,
         ) = pickle.load(open(path, "rb"), encoding="latin1")
+
         self.keys = self.trainVid if train else self.testVid
         self.len = len(self.keys)
 
-        # CMU sentiment score (continuous, [-3, 3]) -> 7 emotion bins
         labels_emotion = {}
         for item in self.videoLabels:
             array = []
@@ -138,22 +139,47 @@ class CMUMOSEIDataset7(Dataset):
                     array.append(4)
                 elif 1 < a <= 2:
                     array.append(5)
-                else:  # a > 2
+                else:
                     array.append(6)
             labels_emotion[item] = array
+
         self.labels_emotion = labels_emotion
 
     def __getitem__(self, index):
         vid = self.keys[index]
+
+        text = np.array(self.videoText[vid], dtype=np.float32)
+        visual = np.array(self.videoVisual[vid], dtype=np.float32)
+        audio = np.array(self.videoAudio[vid], dtype=np.float32)
+        labels = np.array(self.labels_emotion[vid], dtype=np.int64)
+
+        # Fix NaN/Inf trong feature
+        text = np.nan_to_num(text, nan=0.0, posinf=0.0, neginf=0.0)
+        visual = np.nan_to_num(visual, nan=0.0, posinf=0.0, neginf=0.0)
+        audio = np.nan_to_num(audio, nan=0.0, posinf=0.0, neginf=0.0)
+
+        # Kiểm tra length phải khớp theo số utterance
+        L = len(labels)
+        assert text.shape[0] == L, f"{vid}: text length {text.shape[0]} != label length {L}"
+        assert visual.shape[0] == L, f"{vid}: visual length {visual.shape[0]} != label length {L}"
+        assert audio.shape[0] == L, f"{vid}: audio length {audio.shape[0]} != label length {L}"
+
+        qmask = torch.FloatTensor(
+            [
+                [1, 0] if x == "M" else [0, 1]
+                for x in np.array(self.videoSpeakers[vid])
+            ]
+        )
+
+        umask = torch.FloatTensor([1] * L)
+
         return (
-            torch.FloatTensor(np.array(self.videoText[vid])),
-            torch.FloatTensor(np.array(self.videoVisual[vid])),
-            torch.FloatTensor(np.array(self.videoAudio[vid])),
-            torch.FloatTensor(
-                [[1, 0] if x == "M" else [0, 1] for x in np.array(self.videoSpeakers[vid])]
-            ),
-            torch.FloatTensor([1] * len(np.array(self.labels_emotion[vid]))),
-            torch.LongTensor(np.array(self.labels_emotion[vid])),
+            torch.FloatTensor(text),       # textf
+            torch.FloatTensor(visual),     # visuf
+            torch.FloatTensor(audio),      # acouf
+            qmask,                         # qmask
+            umask,                         # umask
+            torch.LongTensor(labels),      # label_emotion
             vid,
         )
 
@@ -162,4 +188,7 @@ class CMUMOSEIDataset7(Dataset):
 
     def collate_fn(self, data):
         dat = pd.DataFrame(data)
-        return [(pad_sequence(dat[i]) if i < 6 else dat[i].tolist()) for i in dat]
+        return [
+            pad_sequence(dat[i]) if i < 6 else dat[i].tolist()
+            for i in dat
+        ]
