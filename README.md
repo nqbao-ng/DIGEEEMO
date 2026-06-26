@@ -27,3 +27,9 @@ python -u run.py --gpu 0 --port 1530 --dataset MELD --epochs 50 --loss_type dist
 --lr 5e-6 --batch_size 16 --hidden_dim 512 --win 4 4 --heter_n_layers 2 2 2 \
 --dropout_1 0.2 --dropout_2 0.3 --gammas 1.0 0.2 1.0 --num_heads 32 --temp 10.0 --l2 1e-5
 ```
+### CMUMOSEID
+```bash
+python -u run.py --dataset CMUMOSEIDataset7 --gpu 0 --port 1534 --lr 8e-05 --l2 0.0001 --batch_size 32 --epochs 80 --hidden_dim 256 \
+--win 5 5 --heter_n_layers 2 2 2 --dropout_1 0.2 --dropout_2 0.4 --loss_type distil --gammas 1.0 0.2 1.0 \
+--num_heads 8 --temp 1.0 --results_root results --seeds 2018 2020 2022 2024 2026 2028 2030 2016 2014 2032 --temp 5.0
+```
