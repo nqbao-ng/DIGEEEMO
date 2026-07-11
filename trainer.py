@@ -45,6 +45,7 @@ def train_or_eval_model(
 
     seed_everything(seed)
     for iter, data in enumerate(dataloader):
+        vids += data[-1]
 
         if train:
             optimizer.zero_grad()
@@ -109,7 +110,6 @@ def train_or_eval_model(
 
         if train:
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
             optimizer.step()
 
         fused_features.append(fused_feature.cpu().detach().numpy())
@@ -120,7 +120,6 @@ def train_or_eval_model(
         initial_feats = np.concatenate(initial_feats)
         fused_features = np.concatenate(fused_features)
 
-    vids += data[-1]
     labels_emo = np.array(labels_emo)
     initial_feats = np.array(initial_feats)
     fused_features = np.array(fused_features)
