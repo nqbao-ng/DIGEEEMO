@@ -10,6 +10,7 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.multiprocessing as mp
 from torch.utils.data.distributed import DistributedSampler
+from torch.utils.data import Subset
 import time
 from utils import AutomaticWeightedLoss
 from model import DiGemo
@@ -17,6 +18,7 @@ from sklearn.metrics import confusion_matrix, classification_report
 from trainer import train_or_eval_model, seed_everything
 from dataloader import (
     IEMOCAPDataset_BERT,
+    IEMOCAPDataset_BERT4,
     MELDDataset_BERT,
     CMUMOSEIDataset7
 )
@@ -46,7 +48,9 @@ parser.add_argument("--tensorboard", action="store_true", default=False, help="E
 
 parser.add_argument("--modals", default="tva", help="modals: tva, tv, ta, va")
 
-parser.add_argument("--dataset", default="IEMOCAP6", help="dataset to train and test IEMOCAP6/MELD")
+parser.add_argument("--dataset", default="IEMOCAP", help="dataset: IEMOCAP/IEMOCAP4/MELD/CMUMOSEI7")
+
+parser.add_argument("--data_path", type=str, default=None, help="optional feature pickle path; overrides the dataset default")
 
 parser.add_argument("--hidden_dim", type=int, default=512, help="hidden_dim")
 
@@ -68,22 +72,6 @@ parser.add_argument("--temp", type=float, default=1.0, help="temp of KL loss")
 
 parser.add_argument("--seed", type=int, default=2020, help="seed")
 
-parser.add_argument(
-    "--seeds",
-    nargs="+",
-    type=int,
-    default=[260, 9161, 1833, 3216, 3620, 6083, 4642, 2931, 5973, 2136],
-    help="List of seeds to run in one command"
-)
-
-parser.add_argument(
-    "--results_root",
-    type=str,
-    default="results",
-    help="Root folder for saving per-seed results"
-)
-
-
 parser.add_argument("--no_intra", action="store_true", default=False, help="does not use Trans based contextual modeling")
 
 parser.add_argument("--fusion_method", default="gated", help="fusion method: gated/concat/add/mean/max")
@@ -102,97 +90,11 @@ os.environ["WORLD_SIZE"] = str(world_size)
 
 MELD_path = "./features/meld_multi_features.pkl"
 IEMOCAP_path = "./features/iemocap_multi_features.pkl"
+IEMOCAP4_path = "./features/iemocap4_multi_features.pkl"
 CMUMOSEI7_path = "./features/cmumosei7_multi_features.pkl"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-
-def normalize_dataset_name(dataset_name):
-    """Allow using either the internal dataset name or the Dataset class name."""
-    if dataset_name == "CMUMOSEIDataset7":
-        return "CMUMOSEI7"
-    return dataset_name
-
-
-def make_seed_result_dir(args):
-    """Create one result folder for the current seed.
-
-    Example:
-        results/CMUMOSEI7_seed_260/
-    """
-    seed_dir = os.path.join(args.results_root, f"{args.dataset}_seed_{args.seed}")
-    os.makedirs(seed_dir, exist_ok=True)
-    os.makedirs(os.path.join(seed_dir, "tnse"), exist_ok=True)
-    os.makedirs(os.path.join(seed_dir, "confusion_matrix"), exist_ok=True)
-    os.makedirs(os.path.join(seed_dir, "checkpoints"), exist_ok=True)
-    return seed_dir
-
-
-def write_seed_result(seed_dir, args, best_epoch, best_loss, best_acc, best_f1, best_label, best_pred):
-    """Save the best result of one seed into that seed's own folder."""
-    report_str = classification_report(best_label, best_pred, digits=4, zero_division=0)
-    conf_matrix = confusion_matrix(best_label, best_pred)
-
-    log_path = os.path.join(seed_dir, "log_results.txt")
-    report_path = os.path.join(seed_dir, "classification_report.txt")
-    conf_path = os.path.join(seed_dir, "confusion_matrix.txt")
-
-    with open(log_path, "w", encoding="utf-8") as f:
-        f.write(f"Dataset: {args.dataset}\n")
-        f.write(f"Seed: {args.seed}\n")
-        f.write(f"Best epoch: {best_epoch}\n")
-        f.write(f"Best loss: {best_loss:.4f}\n")
-        f.write(f"Best Acc: {best_acc:.4f}\n")
-        f.write(f"Best F-Score: {best_f1:.4f}\n\n")
-        f.write("Args:\n")
-        for k, v in sorted(vars(args).items()):
-            f.write(f"  {k}: {v}\n")
-        f.write("\nClassification report:\n")
-        f.write(report_str + "\n")
-        f.write("\nConfusion matrix:\n")
-        f.write(str(conf_matrix) + "\n")
-
-    with open(report_path, "w", encoding="utf-8") as f:
-        f.write(report_str + "\n")
-
-    with open(conf_path, "w", encoding="utf-8") as f:
-        f.write(str(conf_matrix) + "\n")
-
-    return report_str, conf_matrix
-
-
-def write_10seed_summary(args, seed_results):
-    """Save a global summary across all seeds under results_root."""
-    if not seed_results:
-        return
-
-    os.makedirs(args.results_root, exist_ok=True)
-    summary_path = os.path.join(args.results_root, f"{args.dataset}_10seed_summary.txt")
-
-    accs = np.array([x["acc"] for x in seed_results], dtype=float)
-    f1s = np.array([x["f1"] for x in seed_results], dtype=float)
-
-    with open(summary_path, "w", encoding="utf-8") as f:
-        f.write(f"Dataset: {args.dataset}\n")
-        f.write(f"Seeds: {[x['seed'] for x in seed_results]}\n\n")
-        f.write("Per-seed best results:\n")
-        for x in seed_results:
-            f.write(
-                f"Seed: {x['seed']}  "
-                f"Best epoch: {x['best_epoch']}  "
-                f"Acc: {x['acc']:.4f}  "
-                f"F-Score: {x['f1']:.4f}  "
-                f"Folder: {x['seed_dir']}\n"
-            )
-        f.write("\n10-seed summary:\n")
-        f.write(f"ACC mean: {accs.mean():.4f}\n")
-        f.write(f"ACC std:  {accs.std(ddof=1):.4f}\n" if len(accs) > 1 else "ACC std:  0.0000\n")
-        f.write(f"F1 mean:  {f1s.mean():.4f}\n")
-        f.write(f"F1 std:   {f1s.std(ddof=1):.4f}\n" if len(f1s) > 1 else "F1 std:   0.0000\n")
-
-    print(f"10-seed summary saved to: {summary_path}")
-
 
 
 def init_ddp(local_rank):
@@ -208,32 +110,38 @@ def init_ddp(local_rank):
         raise
 
 
-def get_train_valid_sampler(trainset, valid_ratio):
+def get_train_valid_subsets(trainset, valid_ratio):
+    """Create non-overlapping dialogue-level train/validation subsets."""
     size = len(trainset)
-    idx = list(range(size))
     split = int(valid_ratio * size)
+    indices = list(range(size))
 
-    return DistributedSampler(idx[split:]), DistributedSampler(idx[:split])
+    valid_subset = Subset(trainset, indices[:split])
+    train_subset = Subset(trainset, indices[split:])
+    return train_subset, valid_subset
 
 
 def get_data_loaders(path, dataset_class, batch_size, valid_ratio, num_workers, pin_memory):
-    trainset = dataset_class(path)
-    train_sampler, valid_sampler = get_train_valid_sampler(trainset, valid_ratio)
+    full_trainset = dataset_class(path)
+    train_subset, valid_subset = get_train_valid_subsets(full_trainset, valid_ratio)
+
+    train_sampler = DistributedSampler(train_subset, shuffle=True)
+    valid_sampler = DistributedSampler(valid_subset, shuffle=False)
 
     train_loader = DataLoader(
-        trainset,
+        train_subset,
         batch_size=batch_size,
         sampler=train_sampler,
-        collate_fn=trainset.collate_fn,
+        collate_fn=full_trainset.collate_fn,
         num_workers=num_workers,
         pin_memory=pin_memory
     )
 
     valid_loader = DataLoader(
-        trainset,
+        valid_subset,
         batch_size=batch_size,
         sampler=valid_sampler,
-        collate_fn=trainset.collate_fn,
+        collate_fn=full_trainset.collate_fn,
         num_workers=num_workers,
         pin_memory=pin_memory
     )
@@ -244,28 +152,26 @@ def get_data_loaders(path, dataset_class, batch_size, valid_ratio, num_workers, 
         batch_size=batch_size,
         collate_fn=testset.collate_fn,
         num_workers=num_workers,
-        pin_memory=pin_memory
+        pin_memory=pin_memory,
+        shuffle=False
     )
 
     return train_loader, valid_loader, test_loader
 
 
-def setup_samplers(trainset, valid_ratio, epoch):
-    train_sampler, valid_sampler = get_train_valid_sampler(
-        trainset, valid_ratio=valid_ratio)
-    train_sampler.set_epoch(epoch)
-    valid_sampler.set_epoch(epoch)
-
+def setup_samplers(train_loader, valid_loader, epoch):
+    """Advance the actual DistributedSampler objects used by the loaders."""
+    if hasattr(train_loader.sampler, "set_epoch"):
+        train_loader.sampler.set_epoch(epoch)
+    if hasattr(valid_loader.sampler, "set_epoch"):
+        valid_loader.sampler.set_epoch(epoch)
 
 def main(local_rank, seeds):
     
     print(f"Running main(**args) on rank {local_rank}.")
-    init_ddp(local_rank)
-    args.dataset = normalize_dataset_name(args.dataset)
-    seed_results = []
+    init_ddp(local_rank) 
     for seed in seeds:
         args.seed = seed
-        seed_result_dir = make_seed_result_dir(args) if local_rank == 0 else None
 
         today = datetime.datetime.now()
         name_ = args.modals + "_" + args.dataset
@@ -323,7 +229,7 @@ def main(local_rank, seeds):
 
         if args.dataset == "MELD":
             train_loader, valid_loader, test_loader = get_data_loaders(
-                path=MELD_path,
+                path=args.data_path or MELD_path,
                 dataset_class=MELDDataset_BERT,
                 valid_ratio=0.1,
                 batch_size=args.batch_size,
@@ -332,8 +238,18 @@ def main(local_rank, seeds):
             )
         elif args.dataset == "IEMOCAP":
             train_loader, valid_loader, test_loader = get_data_loaders(
-                path=IEMOCAP_path,
+                path=args.data_path or IEMOCAP_path,
                 dataset_class=IEMOCAPDataset_BERT,
+                valid_ratio=0.1,
+                batch_size=args.batch_size,
+                num_workers=0,
+                pin_memory=False
+            )
+
+        elif args.dataset == "IEMOCAP4":
+            train_loader, valid_loader, test_loader = get_data_loaders(
+                path=args.data_path or IEMOCAP4_path,
+                dataset_class=IEMOCAPDataset_BERT4,
                 valid_ratio=0.1,
                 batch_size=args.batch_size,
                 num_workers=0,
@@ -342,7 +258,7 @@ def main(local_rank, seeds):
         
         elif args.dataset == "CMUMOSEI7":
             train_loader, valid_loader, test_loader = get_data_loaders(
-                path=CMUMOSEI7_path,
+                path=args.data_path or CMUMOSEI7_path,
                 dataset_class=CMUMOSEIDataset7,
                 valid_ratio=0.1,
                 batch_size=args.batch_size,
@@ -354,21 +270,13 @@ def main(local_rank, seeds):
             print("There is no such dataset")
 
         best_f1_emo, best_loss = None, None
-        best_acc_emo, best_epoch = None, None
         best_label_emo, best_pred_emo = None, None
         best_initial_feats = None
         best_extracted_feats = None
         all_f1_emo, all_acc_emo, all_loss = [], [], []
 
         for epoch in range(args.epochs):
-            if args.dataset == "MELD":
-                trainset = MELDDataset_BERT(MELD_path)
-            elif args.dataset == "IEMOCAP":
-                trainset = IEMOCAPDataset_BERT(IEMOCAP_path)
-            elif args.dataset == "CMUMOSEI7":
-                trainset = CMUMOSEIDataset7(CMUMOSEI7_path)
-
-            setup_samplers(trainset, valid_ratio=0.1, epoch=epoch)
+            setup_samplers(train_loader, valid_loader, epoch)
 
             start_time = time.time()
 
@@ -449,16 +357,15 @@ def main(local_rank, seeds):
                 
                 if best_f1_emo == None or best_f1_emo < test_f1_emo:
                     best_f1_emo = test_f1_emo
-                    best_acc_emo = test_acc_emo
-                    best_loss = test_loss
-                    best_epoch = epoch + 1
                     best_label_emo, best_pred_emo = test_label_emo, test_pred_emo
                     best_initial_feats = test_initial_feats
                     best_extracted_feats = test_extracted_feats
 
-                    # save checkpoint inside the current seed result folder
-                    save_dir = os.path.join(seed_result_dir, "checkpoints")
-                    os.makedirs(save_dir, exist_ok=True)
+                    # save checkpoints
+                    save_dir = "checkpoints"
+                    if not os.path.exists(save_dir):
+                        os.makedirs(save_dir)
+
                     save_path = os.path.join(save_dir, f"best_model_{args.dataset}_{args.seed}.pth")
 
                     checkpoint = {
@@ -466,9 +373,7 @@ def main(local_rank, seeds):
                         'optimizer_state_dict': optimizer.state_dict(),
                         'args': args,
                         'f1': best_f1_emo,
-                        'acc': best_acc_emo,
-                        'loss': best_loss,
-                        'epoch': best_epoch
+                        'epoch': epoch + 1 
                     }
 
                     torch.save(checkpoint, save_path)
@@ -499,56 +404,26 @@ def main(local_rank, seeds):
             writer.close()
         if local_rank == 0:
             print("Test performance..")
-            print("Acc: {}, F-Score: {}".format(best_acc_emo, best_f1_emo))
+            print("Acc: {}, F-Score: {}".format(max(all_acc_emo), max(all_f1_emo)))
 
-            report_str, conf_matrix = write_seed_result(
-                seed_result_dir,
-                args,
-                best_epoch,
-                best_loss,
-                best_acc_emo,
-                best_f1_emo,
-                best_label_emo,
-                best_pred_emo
-            )
+            log_path = "results/log_results.txt"
+            os.makedirs("results", exist_ok=True)
+
+            report_str = classification_report(best_label_emo,
+                                    best_pred_emo,
+                                    digits=4,
+                                    zero_division=0)
+
+            with open(log_path, "a") as f:
+                f.write(f"Seed: {args.seed}  Acc: {max(all_acc_emo):.4f}   F-Score: {max(all_f1_emo):.4f}\n")
+                # f.write(report_str + "\n")
 
             print(report_str)
-            print(conf_matrix)
-
-            plot_confusion_matrix(
-                conf_matrix,
-                args.dataset,
-                f'conf_{args.seed}',
-                save_dir=os.path.join(seed_result_dir, "confusion_matrix")
-            )
-            plot_tsne(
-                best_initial_feats,
-                best_label_emo,
-                args.dataset,
-                f'initial_features_{args.seed}',
-                save_dir=os.path.join(seed_result_dir, "tnse")
-            )
-            plot_tsne(
-                best_extracted_feats,
-                best_label_emo,
-                args.dataset,
-                f'extracted_features_{args.seed}',
-                save_dir=os.path.join(seed_result_dir, "tnse")
-            )
-
-            seed_results.append({
-                "seed": args.seed,
-                "best_epoch": best_epoch,
-                "acc": best_acc_emo,
-                "f1": best_f1_emo,
-                "seed_dir": seed_result_dir,
-            })
-
-        # Keep all DDP ranks synchronized before moving to the next seed.
-        dist.barrier()
-
-    if local_rank == 0:
-        write_10seed_summary(args, seed_results)
+            # conf_matrix = confusion_matrix(best_label_emo, best_pred_emo)
+            # print(conf_matrix)
+            # plot_confusion_matrix(conf_matrix, args.dataset, f'conf_{args.seed}')
+            plot_tsne(best_initial_feats, best_label_emo, args.dataset, f'initial_features_{args.seed}')
+            plot_tsne(best_extracted_feats, best_label_emo, args.dataset, f'extracted_features_{args.seed}')
 
 
     dist.destroy_process_group()
@@ -560,7 +435,7 @@ if __name__ == "__main__":
     print("not args.no_cuda:", not args.no_cuda)
     n_gpus = torch.cuda.device_count()
     print(f"Use {n_gpus} GPUs")
-    seeds = args.seeds
+    seeds = [260, 9161, 1833, 3216, 3620, 6083, 4642, 2931, 5973, 2136]
     mp.spawn(fn=main, args=(seeds,), nprocs=n_gpus)
 
             
