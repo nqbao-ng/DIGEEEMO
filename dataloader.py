@@ -4,6 +4,69 @@ from torch.nn.utils.rnn import pad_sequence
 import pickle, pandas as pd
 import numpy as np
 
+class IEMOCAPDataset_BERT4(Dataset):
+
+    def __init__(self, path, train=True):
+        (
+            self.videoIDs,
+            self.videoSpeakers,
+            self.videoLabels,
+            self.videoText,
+            self.videoAudio,
+            self.videoVisual,
+            self.videoSentence,
+            self.trainVid,
+            self.testVid,
+        ) = pickle.load(open(path, "rb"), encoding="latin1")
+
+        self.keys = self.trainVid if train else self.testVid
+        self.len = len(self.keys)
+
+    def __getitem__(self, index):
+        vid = self.keys[index]
+
+        text = torch.FloatTensor(np.array(self.videoText[vid]))
+        visual = torch.FloatTensor(np.array(self.videoVisual[vid]))
+        audio = torch.FloatTensor(np.array(self.videoAudio[vid]))
+
+        qmask = torch.FloatTensor(
+            [
+                [1, 0] if speaker == "M" else [0, 1]
+                for speaker in self.videoSpeakers[vid]
+            ]
+        )
+
+        labels = torch.LongTensor(np.array(self.videoLabels[vid]))
+        umask = torch.FloatTensor([1] * len(labels))
+
+        return (
+            text,
+            visual,
+            audio,
+            qmask,
+            umask,
+            labels,
+            vid,
+        )
+
+    def __len__(self):
+        return self.len
+
+    def return_labels(self):
+        return [
+            label
+            for vid in self.keys
+            for label in self.videoLabels[vid]
+        ]
+
+    @staticmethod
+    def collate_fn(data):
+        dat = pd.DataFrame(data)
+
+        return [
+            pad_sequence(dat[i]) if i < 6 else dat[i].tolist()
+            for i in dat
+        ]
 
 class IEMOCAPDataset_BERT(Dataset):
 
