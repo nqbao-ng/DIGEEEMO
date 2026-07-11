@@ -42,7 +42,7 @@ DATASET_CONFIG = {
     "IEMOCAP":   {"embedding_dims": [1024, 342, 1582], "n_classes": 6, "n_speakers": 2,
                   "default_feature": "./features/iemocap_multi_features.pkl"},
     "IEMOCAP4":  {"embedding_dims": [1024, 512, 100],  "n_classes": 4, "n_speakers": 2,
-                  "default_feature": None},
+                  "default_feature": "./features/iemocap4_multi_features.pkl"},
     "MELD":      {"embedding_dims": [1024, 342, 300],  "n_classes": 7, "n_speakers": 9,
                   "default_feature": "./features/meld_multi_features.pkl"},
     "CMUMOSEI7": {"embedding_dims": [1024, 35, 384],   "n_classes": 7, "n_speakers": 9,
@@ -290,7 +290,7 @@ def predict(checkpoint_path, inputs=None, seq_len=50, batch_size=1, device=None)
 def _build_test_loader(args, feature_path=None, batch_size=16):
     """Build the test DataLoader based on args.dataset."""
     from torch.utils.data import DataLoader
-    from dataloader import IEMOCAPDataset_BERT, MELDDataset_BERT
+    from dataloader import IEMOCAPDataset_BERT, IEMOCAPDataset_BERT4, MELDDataset_BERT
 
     dataset = args.dataset
     cfg = DATASET_CONFIG.get(dataset, {})
@@ -306,11 +306,13 @@ def _build_test_loader(args, feature_path=None, batch_size=16):
 
     if dataset == "IEMOCAP":
         testset = IEMOCAPDataset_BERT(path, train=False)
+    elif dataset == "IEMOCAP4":
+        testset = IEMOCAPDataset_BERT4(path, train=False)
     elif dataset == "MELD":
         testset = MELDDataset_BERT(path, train=False)
     else:
         raise ValueError(
-            f"Confusion matrix currently supports IEMOCAP and MELD only "
+            f"Confusion matrix currently supports IEMOCAP, IEMOCAP4 and MELD only "
             f"(current dataset: '{dataset}')."
         )
 
